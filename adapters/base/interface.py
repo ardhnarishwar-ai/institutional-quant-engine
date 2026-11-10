@@ -1,6 +1,7 @@
-"""Abstract adapter contract with explicit, guarded lifecycle transitions."""
+"""Abstract adapter contract with guarded lifecycle and guaranteed teardown."""
 from __future__ import annotations
 
+import asyncio
 from abc import ABC, abstractmethod
 from enum import Enum
 from threading import RLock
@@ -53,18 +54,45 @@ class BaseAdapter(ABC):
                 raise InvalidStateTransition(f"{self._state.value} -> {target.value} is not allowed")
             self._state = target
 
+    async def _disconnect_shielded(self, *, suppress_errors: bool = False) -> None:
+        """Finish teardown despite cancellation; optionally propagate close errors."""
+        cleanup = asyncio.create_task(self.disconnect())
+        while not cleanup.done():
+            try:
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError:
+                # Keep waiting for the independent cleanup task. The caller's
+                # original exception/cancellation is re-raised by the caller.
+                continue
+            except BaseException:
+                break
+        try:
+            cleanup.result()
+        except BaseException:
+            if not suppress_errors:
+                raise
+
     async def start(self):
+        """Connect, synchronize, and become READY; rollback every partial start."""
         if self.state != AdapterState.DISCONNECTED:
             raise InvalidStateTransition("start requires DISCONNECTED state")
+
+        connected = False
         self.transition(AdapterState.CONNECTING)
         try:
             await self.connect()
+            connected = True
             self.transition(AdapterState.SYNCING)
             await self.synchronize()
             self.transition(AdapterState.READY)
-        except Exception:
-            if self.state != AdapterState.DISCONNECTED:
-                self.transition(AdapterState.DISCONNECTED)
+        except BaseException:
+            try:
+                if connected:
+                    await self._disconnect_shielded(suppress_errors=True)
+            finally:
+                # CONNECTING/SYNCING can always return to DISCONNECTED.
+                if self.state != AdapterState.DISCONNECTED:
+                    self.transition(AdapterState.DISCONNECTED)
             raise
 
     async def mark_stale(self):
@@ -73,10 +101,25 @@ class BaseAdapter(ABC):
         self.transition(AdapterState.STALE)
 
     async def stop(self):
+        """Close resources and guarantee a terminal DISCONNECTED state."""
         if self.state == AdapterState.DISCONNECTED:
             return
-        await self.disconnect()
-        self.transition(AdapterState.DISCONNECTED)
+        try:
+            await self._disconnect_shielded()
+        finally:
+            if self.state != AdapterState.DISCONNECTED:
+                self.transition(AdapterState.DISCONNECTED)
+
+    async def guarded_events(self) -> AsyncIterator[EventEnvelope]:
+        """Forward events and tear down transport if iteration fails unexpectedly."""
+        if self.state != AdapterState.READY:
+            raise InvalidStateTransition("guarded_events requires READY state")
+        try:
+            async for event in self.events():
+                yield event
+        except BaseException:
+            await self.stop()
+            raise
 
     @abstractmethod
     async def connect(self) -> None:
