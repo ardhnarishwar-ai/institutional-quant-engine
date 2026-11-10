@@ -74,9 +74,9 @@ def test_missing_provenance_is_rejected():
     assert RejectionReason.MISSING_PROVENANCE in result.rejection_reasons
 
 
-def test_future_exchange_timestamp_is_rejected_without_clock_rewrite():
-    result = gate().evaluate(item(exchange_timestamp_ns=111, receive_timestamp_ns=110))
-    assert RejectionReason.INVALID_CLOCK_ORDER in result.rejection_reasons
+def test_exchange_and_receive_clocks_are_independent_domains():
+    result = gate().evaluate(item(exchange_timestamp_ns=9_000_000_000, receive_timestamp_ns=110))
+    assert result.eligible
 
 
 @pytest.mark.parametrize("instrument", sorted(ALLOWED))

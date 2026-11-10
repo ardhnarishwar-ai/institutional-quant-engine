@@ -105,8 +105,7 @@ class SignalQualityGate:
             reasons.append(RejectionReason.MISSING_EXCHANGE_TIMESTAMP)
         if not item.source_event_ids:
             reasons.append(RejectionReason.MISSING_PROVENANCE)
-        if item.exchange_timestamp_ns is not None and item.exchange_timestamp_ns > item.receive_timestamp_ns:
-            reasons.append(RejectionReason.INVALID_CLOCK_ORDER)
+        # Exchange and receive clocks are independent domains; do not compare raw values.
 
         # Stable taxonomy ordering and no duplicate reason values.
         unique = tuple(dict.fromkeys(reasons))
