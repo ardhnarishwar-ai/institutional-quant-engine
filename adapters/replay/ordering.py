@@ -17,7 +17,7 @@ def merge_event_streams(streams):
 
     def key(event, source_index):
         return (
-            event.exchange_timestamp_ns,
+            (0, event.exchange_timestamp_ns) if event.exchange_timestamp_ns is not None else (1, event.receive_timestamp_ns),
             event.venue,
             event.instrument.canonical_id,
             event.sequence_domain or "",
@@ -43,7 +43,7 @@ def merge_event_streams(streams):
             nxt = next(iterators[i])
         except StopIteration:
             continue
-        if nxt.exchange_timestamp_ns < previous[i]:
+        if previous[i] is not None and nxt.exchange_timestamp_ns is not None and nxt.exchange_timestamp_ns < previous[i]:
             raise ValueError(f"input stream {i} is not sorted by exchange timestamp")
         previous[i] = nxt.exchange_timestamp_ns
         heapq.heappush(heap, (key(nxt, i), next(serial), nxt, i))

@@ -23,6 +23,10 @@ class ReplayClock:
         self._last_event_ns = None
 
     async def wait_until(self, exchange_timestamp_ns):
+        # Unknown exchange time remains unknown; never substitute receive time.
+        if exchange_timestamp_ns is None:
+            self._last_event_ns = None
+            return
         if self.speed in ("max", "unthrottled"):
             self._last_event_ns = exchange_timestamp_ns
             return
