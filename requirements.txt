@@ -1,3 +1,6 @@
 # Runtime calculations use the Python standard library.
 # pytest is required for local tests and CI.
 pytest>=8.3,<9
+
+# Async SmartAPI WebSocket transport
+websockets>=14,<16
