@@ -2,6 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 from adapters.base.events import DepthSnapshotEvent, DepthDeltaEvent
+from adapters.base.depth_batch import DepthDeltaBatchEvent
 
 class DepthHealth(str, Enum):
     AWAITING_SNAPSHOT = "AWAITING_SNAPSHOT"
@@ -19,6 +20,7 @@ class DepthResult:
     sequence_gap: tuple[int, int] | None = None
     recovered: bool = False
     book_version: int = 0
+    depth_bridged: bool = False
 
 @dataclass
 class _Book:
@@ -27,6 +29,7 @@ class _Book:
     asks: dict[float, float] = field(default_factory=dict)
     last_sequence: int | None = None
     book_version: int = 0
+    depth_bridged: bool = False
 
 class DepthRecoveryManager:
     # One isolated book per venue, canonical instrument and sequence domain.
@@ -65,8 +68,14 @@ class DepthRecoveryManager:
         if max(bids) >= min(asks):
             raise DepthRecoveryError("snapshot is crossed")
         # Atomic replacement; stale levels are never merged into a fresh snapshot.
-        book = _Book(DepthHealth.SYNCHRONIZED, bids, asks, snapshot.snapshot_sequence,
-                     (old.book_version + 1 if old else 1))
+        book = _Book(
+            health=DepthHealth.SYNCHRONIZED,
+            bids=bids,
+            asks=asks,
+            last_sequence=snapshot.snapshot_sequence,
+            book_version=(old.book_version + 1 if old else 1),
+            depth_bridged=False,
+        )
         self._books[key] = book
         kind = "DEPTH_SNAPSHOT_RECOVERY" if recovered else "DEPTH_SNAPSHOT_BOUNDARY"
         self._record(key, kind, snapshot_sequence=snapshot.snapshot_sequence,
@@ -129,6 +138,45 @@ class DepthRecoveryManager:
         book.book_version += 1
         self._record(key, "DEPTH_DELTA_APPLIED", sequence_number=sequence_number,
                      book_version=book.book_version)
+        return DepthResult(True, book.health, "applied", book_version=book.book_version)
+
+    def apply_batch(self, venue, instrument_id, sequence_domain, batch):
+        if not isinstance(batch, DepthDeltaBatchEvent):
+            raise TypeError("batch must be DepthDeltaBatchEvent")
+        key = self._key(venue, instrument_id, sequence_domain)
+        book = self._books.get(key)
+        seq = batch.final_update_id
+        if book is None or book.health == DepthHealth.AWAITING_SNAPSHOT:
+            self._record(key, "DEPTH_DELTA_QUARANTINED", sequence_number=seq, reason="awaiting_initial_snapshot")
+            return DepthResult(False, DepthHealth.AWAITING_SNAPSHOT, "awaiting_initial_snapshot")
+        if book.health == DepthHealth.DESYNCHRONIZED:
+            self._record(key, "DEPTH_DELTA_QUARANTINED", sequence_number=seq, reason="awaiting_recovery_snapshot")
+            return DepthResult(False, book.health, "awaiting_recovery_snapshot", book_version=book.book_version)
+        if book.last_sequence is not None:
+            if not book.depth_bridged:
+                valid = batch.first_update_id <= book.last_sequence + 1 <= batch.final_update_id
+            else:
+                valid = batch.previous_final_update_id == book.last_sequence
+            if not valid:
+                gap = (book.last_sequence + 1, max(book.last_sequence + 1, batch.first_update_id - 1))
+                book.health = DepthHealth.DESYNCHRONIZED
+                self._record(key, "DEPTH_SEQUENCE_GAP", missing_from=gap[0], missing_to=gap[1], observed_sequence=seq, action="DESYNCHRONIZED")
+                self._record(key, "DEPTH_DELTA_QUARANTINED", sequence_number=seq, reason="sequence_gap")
+                return DepthResult(False, book.health, "sequence_gap", sequence_gap=gap, book_version=book.book_version)
+        bids, asks = dict(book.bids), dict(book.asks)
+        for change in batch.changes:
+            side = bids if change.side == "BID" else asks
+            if change.action == "DELETE": side.pop(change.price, None)
+            else: side[change.price] = change.quantity
+        if bids and asks and max(bids) >= min(asks):
+            book.health = DepthHealth.DESYNCHRONIZED
+            self._record(key, "DEPTH_BOOK_INVALID", sequence_number=seq, reason="crossed_book", action="DESYNCHRONIZED")
+            return DepthResult(False, book.health, "crossed_book", book_version=book.book_version)
+        book.bids, book.asks = bids, asks
+        book.last_sequence = seq
+        book.depth_bridged = True
+        book.book_version += 1
+        self._record(key, "DEPTH_DELTA_BATCH_APPLIED", sequence_number=seq, change_count=len(batch.changes), book_version=book.book_version)
         return DepthResult(True, book.health, "applied", book_version=book.book_version)
 
     def book(self, venue, instrument_id, sequence_domain):

@@ -12,6 +12,7 @@ from adapters.base.instrument import InstrumentId
 class EventType(str, Enum):
     TRADE = "TRADE"
     DEPTH_DELTA = "DEPTH_DELTA"
+    DEPTH_DELTA_BATCH = "DEPTH_DELTA_BATCH"
     DEPTH_SNAPSHOT = "DEPTH_SNAPSHOT"
     OPTION_METRIC = "OPTION_METRIC"
     QUOTE = "QUOTE"
@@ -80,6 +81,10 @@ class DepthDeltaEvent:
             raise ValueError("action must be SET or DELETE")
         if self.action == "DELETE" and self.quantity != 0:
             raise ValueError("DELETE action requires quantity=0")
+
+
+# Compatibility export for atomic depth-batch consumers.
+DepthDeltaChange = DepthDeltaEvent
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,8 +185,13 @@ class EventEnvelope:
             _nonnegative_int(self.sequence_number, "sequence_number")
             if not isinstance(self.sequence_domain, str) or not self.sequence_domain.strip():
                 raise ValueError("sequence_number requires a non-empty sequence_domain")
-        if not isinstance(self.payload, _EXPECTED[self.event_type]):
-            raise TypeError(f"{self.event_type.value} requires {_EXPECTED[self.event_type].__name__}")
+        if self.event_type == EventType.DEPTH_DELTA_BATCH:
+            from adapters.base.depth_batch import DepthDeltaBatchEvent
+            expected = DepthDeltaBatchEvent
+        else:
+            expected = _EXPECTED[self.event_type]
+        if not isinstance(self.payload, expected):
+            raise TypeError(f"{self.event_type.value} requires {expected.__name__}")
         if not isinstance(self.event_id, str) or not self.event_id.strip():
             raise ValueError("event_id is required")
         if not isinstance(self.schema_version, int) or self.schema_version < 1:

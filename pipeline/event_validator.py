@@ -6,6 +6,7 @@ from enum import Enum
 from typing import Optional
 
 from adapters.base.events import EventEnvelope, EventType
+from adapters.base.depth_batch import DepthDeltaBatchEvent
 
 
 class EventValidationError(ValueError):
@@ -33,6 +34,7 @@ class _StreamState:
     receive_timestamp_ns: int
     sequence_number: Optional[int]
     health: StreamHealth = StreamHealth.SYNCHRONIZED
+    depth_bridged: bool = False
 
 
 class EventValidator:
@@ -98,7 +100,8 @@ class EventValidator:
 
         key = self._stream_key(event)
         previous = self._streams.get(key)
-        is_depth_delta = event.event_type == EventType.DEPTH_DELTA
+        is_depth_delta = event.event_type in (EventType.DEPTH_DELTA, EventType.DEPTH_DELTA_BATCH)
+        is_batch = event.event_type == EventType.DEPTH_DELTA_BATCH
         is_snapshot = event.event_type == EventType.DEPTH_SNAPSHOT
 
         if previous and previous.health == StreamHealth.DESYNCHRONIZED:
@@ -142,10 +145,18 @@ class EventValidator:
             recovered = previous is not None and previous.health == StreamHealth.DESYNCHRONIZED
         elif previous and incoming_seq is not None and previous.sequence_number is not None:
             expected = previous.sequence_number + 1
-            if incoming_seq > expected:
-                gap = (expected, incoming_seq - 1)
-            elif incoming_seq < expected:
-                raise EventValidationError("sequence number regressed or duplicated")
+            if is_batch:
+                batch = event.payload
+                valid = (batch.first_update_id <= expected <= batch.final_update_id) if not previous.depth_bridged else (batch.previous_final_update_id == previous.sequence_number)
+                if not valid:
+                    if incoming_seq <= previous.sequence_number:
+                        raise EventValidationError("sequence number regressed or duplicated")
+                    gap = (expected, max(expected, batch.first_update_id - 1))
+            else:
+                if incoming_seq > expected:
+                    gap = (expected, incoming_seq - 1)
+                elif incoming_seq < expected:
+                    raise EventValidationError("sequence number regressed or duplicated")
 
         if gap is not None:
             meta = {
@@ -164,7 +175,7 @@ class EventValidator:
             self._record(meta)
             self._streams[key] = _StreamState(
                 event.exchange_timestamp_ns, event.receive_timestamp_ns,
-                incoming_seq, StreamHealth.DESYNCHRONIZED)
+                incoming_seq, StreamHealth.DESYNCHRONIZED, False)
             self._events[event.event_id] = event
             # The gap-causing depth delta is itself quarantined.
             if is_depth_delta:
@@ -189,7 +200,7 @@ class EventValidator:
             self._record(meta)
             self._streams[key] = _StreamState(
                 event.exchange_timestamp_ns, event.receive_timestamp_ns,
-                incoming_seq, StreamHealth.SYNCHRONIZED)
+                incoming_seq, StreamHealth.SYNCHRONIZED, False)
             self._events[event.event_id] = event
             self._pending_children.pop(event.event_id, None)
             if causal_parent_pending:
@@ -199,7 +210,7 @@ class EventValidator:
 
         self._streams[key] = _StreamState(
             event.exchange_timestamp_ns, event.receive_timestamp_ns,
-            incoming_seq, StreamHealth.SYNCHRONIZED)
+            incoming_seq, StreamHealth.SYNCHRONIZED, bool(is_batch))
         self._events[event.event_id] = event
         self._pending_children.pop(event.event_id, None)
         if causal_parent_pending:

@@ -1,6 +1,7 @@
 import asyncio,json,math,time
 from typing import AsyncIterator
 from adapters.base.events import DepthDeltaEvent,DepthSnapshotEvent,DepthSnapshotLevel,EventEnvelope,EventType,TradeEvent
+from adapters.base.depth_batch import DepthDeltaBatchEvent
 from adapters.base.instrument import InstrumentId,InstrumentKind
 from adapters.base.interface import AdapterState,BaseAdapter
 from adapters.crypto.binance_usdm.config import BinanceUSDMConfig
@@ -78,16 +79,16 @@ class BinanceUSDMLiveAdapter(BaseAdapter):
             if any(k not in data for k in ("E","T","U","u","pu","b","a")): raise BinanceFrameError("depthUpdate missing fields")
             first,final,prev=(_int(data["U"],"U"),_int(data["u"],"u"),_int(data["pu"],"pu"))
             if final<first: raise BinanceFrameError("inverted depth range")
-            ex,rx=self._times(data["E"],data["T"],"depth"); result=[]
+            ex,rx=self._times(data["E"],data["T"],"depth"); changes=[]
             for side,rows in (("BID",data["b"]),("ASK",data["a"])):
                 if not isinstance(rows,list): raise BinanceFrameError("depth side must be array")
                 for row in rows:
                     if not isinstance(row,list) or len(row)!=2: raise BinanceFrameError("depth level must be [price,qty]")
                     price,qty=_num(row[0],"price"),_num(row[1],"quantity",True)
-                    payload=DepthDeltaEvent(side,price,qty,"DELETE" if qty==0 else "SET")
-                    event=self._event(EventType.DEPTH_DELTA,payload,ex,rx,final,self.depth_sequence_domain,"depth")
-                    self._depth_ranges[event.event_id]=(first,final,prev); result.append(event)
-            return result
+                    changes.append(DepthDeltaEvent(side,price,qty,"DELETE" if qty==0 else "SET"))
+            if not changes: raise BinanceFrameError("depth update must contain at least one level change")
+            payload=DepthDeltaBatchEvent(tuple(changes),first,final,prev)
+            return [self._event(EventType.DEPTH_DELTA_BATCH,payload,ex,rx,final,self.depth_sequence_domain,"depth")]
         raise BinanceFrameError(f"unsupported event type: {kind!r}")
     def _install_snapshot(self,snap):
         if not isinstance(snap,dict) or not {"lastUpdateId","bids","asks"}<=set(snap): raise BinanceFrameError("snapshot requires lastUpdateId/bids/asks")

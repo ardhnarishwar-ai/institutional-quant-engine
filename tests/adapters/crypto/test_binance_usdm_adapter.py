@@ -36,8 +36,11 @@ def test_buyer_taker_maps_buy():
 
 def test_depth_delta_delete_and_own_domain():
     events=make().decode_frame(json.dumps(depth()))
-    assert len(events)==3 and events[0].payload.side=="BID"
-    assert events[1].payload.action=="DELETE"
+    assert len(events) == 1
+    batch = events[0].payload
+    assert len(batch.changes) == 3
+    assert batch.changes[0].side == "BID"
+    assert batch.changes[1].action == "DELETE"
     assert events[0].sequence_domain.endswith(":DEPTH")
 
 def test_strict_schema_symbol_and_numeric_validation():
@@ -60,9 +63,9 @@ def test_depth_bridge_and_pu_chain():
     async def run():
         a=make(snapshot_provider=provider); await a.start(); await a._queue.get()
         await a.ingest(json.dumps(depth(101,102,99)))
-        assert a._last_depth_update==102 and a._queue.qsize()==3
+        assert a._last_depth_update==102 and a._queue.qsize() == 1
         await a.ingest(json.dumps(depth(103,104,102)))
-        assert a._last_depth_update==104 and a._queue.qsize()==6
+        assert a._last_depth_update==104 and a._queue.qsize() == 2
         await a.stop()
     asyncio.run(run())
 

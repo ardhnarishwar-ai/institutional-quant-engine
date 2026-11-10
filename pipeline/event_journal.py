@@ -14,6 +14,7 @@ from adapters.base.events import (
     EventType, OptionMetricEvent, QuoteEvent, TradeEvent,
 )
 from adapters.base.instrument import InstrumentId, InstrumentKind
+from adapters.base.depth_batch import DepthDeltaBatchEvent
 
 JOURNAL_SCHEMA_VERSION = 1
 
@@ -100,6 +101,13 @@ class EventJournal:
             payload = QuoteEvent(**payload_raw)
         elif typ == EventType.DEPTH_DELTA:
             payload = DepthDeltaEvent(**payload_raw)
+        elif typ == EventType.DEPTH_DELTA_BATCH:
+            payload = DepthDeltaBatchEvent(
+                changes=tuple(DepthDeltaEvent(**x) for x in payload_raw["changes"]),
+                first_update_id=payload_raw["first_update_id"],
+                final_update_id=payload_raw["final_update_id"],
+                previous_final_update_id=payload_raw["previous_final_update_id"],
+            )
         elif typ == EventType.DEPTH_SNAPSHOT:
             payload = DepthSnapshotEvent(
                 bids=tuple(DepthSnapshotLevel(**x) for x in payload_raw["bids"]),
