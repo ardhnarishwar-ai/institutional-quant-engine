@@ -11,7 +11,7 @@ from threading import Lock
 
 from adapters.base.events import (
     DepthDeltaEvent, DepthSnapshotEvent, DepthSnapshotLevel, EventEnvelope,
-    EventType, OptionMetricEvent, TradeEvent,
+    EventType, OptionMetricEvent, QuoteEvent, TradeEvent,
 )
 from adapters.base.instrument import InstrumentId, InstrumentKind
 
@@ -96,6 +96,8 @@ class EventJournal:
         payload_raw = raw["payload"]
         if typ == EventType.TRADE:
             payload = TradeEvent(**payload_raw)
+        elif typ == EventType.QUOTE:
+            payload = QuoteEvent(**payload_raw)
         elif typ == EventType.DEPTH_DELTA:
             payload = DepthDeltaEvent(**payload_raw)
         elif typ == EventType.DEPTH_SNAPSHOT:

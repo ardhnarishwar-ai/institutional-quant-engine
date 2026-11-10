@@ -80,7 +80,8 @@ class EventValidator:
         if parent_id:
             parent = self._events.get(parent_id)
             if parent is not None:
-                if parent.exchange_timestamp_ns > event.exchange_timestamp_ns:
+                if (parent.exchange_timestamp_ns is not None and event.exchange_timestamp_ns is not None
+                        and parent.exchange_timestamp_ns > event.exchange_timestamp_ns):
                     raise EventValidationError("causal parent exchange timestamp is later than child")
                 if parent.receive_timestamp_ns > event.receive_timestamp_ns:
                     raise EventValidationError("causal parent receive timestamp is later than child")
@@ -89,7 +90,8 @@ class EventValidator:
 
         pending_children = self._pending_children.get(event.event_id, ())
         for child in pending_children:
-            if event.exchange_timestamp_ns > child.exchange_timestamp_ns:
+            if (event.exchange_timestamp_ns is not None and child.exchange_timestamp_ns is not None
+                    and event.exchange_timestamp_ns > child.exchange_timestamp_ns):
                 raise EventValidationError("causal parent exchange timestamp is later than pending child")
             if event.receive_timestamp_ns > child.receive_timestamp_ns:
                 raise EventValidationError("causal parent receive timestamp is later than pending child")
@@ -123,7 +125,8 @@ class EventValidator:
                 return ValidationResult(False, quarantined=True, metadata=meta)
 
         if previous:
-            if event.exchange_timestamp_ns < previous.exchange_timestamp_ns:
+            if (event.exchange_timestamp_ns is not None and previous.exchange_timestamp_ns is not None
+                    and event.exchange_timestamp_ns < previous.exchange_timestamp_ns):
                 raise EventValidationError("exchange timestamp regressed within stream")
             if event.receive_timestamp_ns < previous.receive_timestamp_ns:
                 raise EventValidationError("receive timestamp regressed within stream")

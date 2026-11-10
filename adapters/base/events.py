@@ -14,6 +14,39 @@ class EventType(str, Enum):
     DEPTH_DELTA = "DEPTH_DELTA"
     DEPTH_SNAPSHOT = "DEPTH_SNAPSHOT"
     OPTION_METRIC = "OPTION_METRIC"
+    QUOTE = "QUOTE"
+
+
+@dataclass(frozen=True, slots=True)
+class QuoteEvent:
+    # A quote update is not an individual trade print.
+    last_price: float | None = None
+    last_quantity: int | None = None
+    cumulative_volume: int | None = None
+    average_price: float | None = None
+    open_price: float | None = None
+    high_price: float | None = None
+    low_price: float | None = None
+    close_price: float | None = None
+    total_buy_quantity: float | None = None
+    total_sell_quantity: float | None = None
+    open_interest: int | None = None
+
+    def __post_init__(self):
+        for name in ("last_price", "average_price", "open_price", "high_price", "low_price", "close_price"):
+            value = getattr(self, name)
+            if value is not None:
+                _positive_finite(value, name)
+        for name in ("last_quantity", "cumulative_volume", "open_interest"):
+            value = getattr(self, name)
+            if value is not None and (not isinstance(value, int) or isinstance(value, bool) or value < 0):
+                raise ValueError(f"{name} must be a non-negative integer")
+        for name in ("total_buy_quantity", "total_sell_quantity"):
+            value = getattr(self, name)
+            if value is not None:
+                _finite(value, name)
+                if value < 0:
+                    raise ValueError(f"{name} cannot be negative")
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,9 +131,10 @@ class OptionMetricEvent:
             raise ValueError("dealer_position_sign must be None, -1 or +1")
 
 
-Payload: TypeAlias = TradeEvent | DepthDeltaEvent | DepthSnapshotEvent | OptionMetricEvent
+Payload: TypeAlias = QuoteEvent | TradeEvent | DepthDeltaEvent | DepthSnapshotEvent | OptionMetricEvent
 _EXPECTED = {
     EventType.TRADE: TradeEvent,
+    EventType.QUOTE: QuoteEvent,
     EventType.DEPTH_DELTA: DepthDeltaEvent,
     EventType.DEPTH_SNAPSHOT: DepthSnapshotEvent,
     EventType.OPTION_METRIC: OptionMetricEvent,
@@ -112,7 +146,7 @@ class EventEnvelope:
     venue: str
     instrument: InstrumentId
     event_type: EventType
-    exchange_timestamp_ns: int
+    exchange_timestamp_ns: int | None
     receive_timestamp_ns: int
     sequence_number: int | None
     sequence_domain: str | None
@@ -132,7 +166,8 @@ class EventEnvelope:
             raise ValueError("envelope venue must match instrument venue")
         if not isinstance(self.event_type, EventType):
             raise TypeError("event_type must be EventType")
-        _nonnegative_int(self.exchange_timestamp_ns, "exchange_timestamp_ns")
+        if self.exchange_timestamp_ns is not None:
+            _nonnegative_int(self.exchange_timestamp_ns, "exchange_timestamp_ns")
         _nonnegative_int(self.receive_timestamp_ns, "receive_timestamp_ns")
         if self.sequence_number is None:
             if self.sequence_domain is not None:
