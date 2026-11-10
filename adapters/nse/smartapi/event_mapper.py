@@ -20,7 +20,7 @@ class SmartAPIEventMapper:
             asks = tuple(sorted(
                 (DepthSnapshotLevel(x.price, x.quantity) for x in packet.depth_20_asks if x.price > 0 and x.quantity > 0),
                 key=lambda x: x.price))
-            payload = DepthSnapshotEvent(bids=bids, asks=asks, snapshot_sequence=0)
+            payload = DepthSnapshotEvent(bids=bids, asks=asks, snapshot_sequence=None)
             typ, exchange_ns, sequence, domain = EventType.DEPTH_SNAPSHOT, None, None, None
         elif packet.mode in (1, 2, 3):
             payload = QuoteEvent(

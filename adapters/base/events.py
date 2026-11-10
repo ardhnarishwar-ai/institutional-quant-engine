@@ -96,11 +96,15 @@ class DepthSnapshotLevel:
 class DepthSnapshotEvent:
     bids: tuple[DepthSnapshotLevel, ...]
     asks: tuple[DepthSnapshotLevel, ...]
-    snapshot_sequence: int
+    snapshot_sequence: int | None
 
     def __post_init__(self):
-        if not isinstance(self.snapshot_sequence, int) or self.snapshot_sequence < 0:
-            raise ValueError("snapshot_sequence must be a non-negative integer")
+        if self.snapshot_sequence is not None and (
+            not isinstance(self.snapshot_sequence, int)
+            or isinstance(self.snapshot_sequence, bool)
+            or self.snapshot_sequence < 0
+        ):
+            raise ValueError("snapshot_sequence must be None or a non-negative integer")
         if not isinstance(self.bids, tuple) or not isinstance(self.asks, tuple):
             raise TypeError("bids and asks must be tuples")
         if any(not isinstance(x, DepthSnapshotLevel) for x in self.bids + self.asks):
