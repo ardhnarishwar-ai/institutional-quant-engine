@@ -8,6 +8,11 @@ from adapters.crypto.binance_usdm.config import BinanceUSDMConfig
 from adapters.crypto.binance_usdm.transport import BinanceWebSocketTransport
 
 class BinanceFrameError(ValueError): pass
+
+
+class BinanceBackpressureError(RuntimeError):
+    """Raised when a configured Binance event queue cannot accept data."""
+
 def _int(v,n):
     if isinstance(v,bool) or not isinstance(v,int) or v<0: raise BinanceFrameError(f"{n} must be non-negative integer")
     return v
@@ -19,14 +24,19 @@ def _num(v,n,zero=False):
 
 class BinanceUSDMLiveAdapter(BaseAdapter):
     # Public BTCUSDT USD-M feed; no credentials, account or order methods.
-    def __init__(self,config=None,*,transport=None,snapshot_provider=None,receive_clock=time.time_ns,monotonic_clock=time.monotonic_ns):
+    def __init__(self,config=None,*,transport=None,snapshot_provider=None,receive_clock=time.time_ns,monotonic_clock=time.monotonic_ns,queue_maxsize=256):
         self.config=config or BinanceUSDMConfig()
         super().__init__("BINANCE-USD-M-BTCUSDT")
         self.instrument=InstrumentId("BINANCE",InstrumentKind.CRYPTO_PERPETUAL,"BTCUSDT","USDT")
         self.transport=transport or BinanceWebSocketTransport(self.config.websocket_url)
         self.snapshot_provider=snapshot_provider
         self.receive_clock,self.monotonic_clock=receive_clock,monotonic_clock
-        self._queue=asyncio.Queue(); self._event_counter=0
+        if isinstance(queue_maxsize, bool) or not isinstance(queue_maxsize, int) or queue_maxsize < 1:
+            raise ValueError("queue_maxsize must be a positive integer")
+        self.queue_maxsize = queue_maxsize
+        # Bounded queue applies backpressure to the transport reader; events are
+        # never silently dropped when the downstream consumer falls behind.
+        self._queue=asyncio.Queue(maxsize=queue_maxsize); self._event_counter=0
         self._last_depth_update=None; self._depth_synced=False; self._depth_bridged=False; self._pending_depth=[]
         self._depth_ranges={}; self._last_exchange={}; self._last_receive={}; self._last_monotonic=None
         self._reader_task=None; self._stop=asyncio.Event(); self.sequence_gaps=[]

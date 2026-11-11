@@ -162,6 +162,13 @@ class ReadOnlyShadowCapture:
                     self._record_failure("SHADOW_JOURNAL", self._fatal_error)
                     self._fatal.set()
                     self._stop.set()
+                    # A producer may be blocked on bounded queue.put(). Cancel
+                    # every feed producer immediately: no unjournaled intake
+                    # may continue after durable append has failed. stop()
+                    # performs the awaited joins and adapter disconnects.
+                    for producer in tuple(self._producers):
+                        if producer is not asyncio.current_task() and not producer.done():
+                            producer.cancel()
                     return
                 self._persisted += 1
             finally:
@@ -170,8 +177,12 @@ class ReadOnlyShadowCapture:
     async def run(self) -> ShadowCaptureStats:
         await self.start()
         try:
-            await asyncio.gather(*self._producers)
-            await self._drain_and_close_writer()
+            results = await asyncio.gather(*self._producers, return_exceptions=True)
+            if self._fatal_error is None:
+                for result in results:
+                    if isinstance(result, BaseException):
+                        raise result
+                await self._drain_and_close_writer()
         finally:
             await self.stop()
         if self._fatal_error is not None:
